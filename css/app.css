@@ -2459,6 +2459,31 @@ summary{
 
 }
 
+.deployStep.completed .deployIcon{
+
+    background: rgba(34,197,94,.15);
+
+    color: #22c55e;
+
+}
+
+.deployStep.active .deployIcon{
+
+    background: rgba(212,175,55,.22);
+
+    color: var(--gold);
+
+    box-shadow: 0 0 0 3px rgba(212,175,55,.15);
+}
+
+.deployStep.error .deployIcon{
+
+    background: rgba(239,68,68,.15);
+
+    color: #ef4444;
+
+}
+
 
 /* =====================================================
    RESULT

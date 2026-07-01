@@ -1,8 +1,6 @@
-// =====================================================
-// LaunchFuture
-// Main Controller
-// Part 1
-// Foundation
+// ===================================================== 
+// LaunchFuture Main Controller Part 1 
+// Foundation 
 // =====================================================
 
 import {
@@ -58,8 +56,6 @@ import {
 } from "./wizard.js";
 
 import {
-
-    estimateDeployFee,
 
     buildTokenConfig,
 

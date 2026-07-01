@@ -1155,6 +1155,44 @@ export function appendConsole(
 }
 
 // =====================================================
+// Loading Overlay
+// =====================================================
+
+export function setLoading(isLoading, text = "Loading...") {
+
+    if (ui.loadingText) {
+        ui.loadingText.textContent = text;
+    }
+
+    if (ui.loadingOverlay) {
+        ui.loadingOverlay.hidden = !isLoading;
+    }
+
+    state.loading = isLoading;
+}
+
+// =====================================================
+// Deploy Timeline
+// =====================================================
+
+export function updateDeployTimeline(activeIndex, erroredIndex = -1) {
+
+    const steps = $$("#deployTimeline .deployStep");
+
+    steps.forEach((step, index) => {
+        step.classList.remove("active", "completed", "error");
+
+        if (erroredIndex !== -1 && index === erroredIndex) {
+            step.classList.add("error");
+        } else if (index < activeIndex) {
+            step.classList.add("completed");
+        } else if (index === activeIndex) {
+            step.classList.add("active");
+        }
+    });
+}
+
+// =====================================================
 // Modal
 // =====================================================
 

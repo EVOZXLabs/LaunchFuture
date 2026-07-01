@@ -7,6 +7,7 @@
 
 import { getFactory, getDeployFee, getPaymentMethod } from "./factory.js";
 import { getCurrentNetwork } from "./networks/index.js";
+import { getContract } from "./blockchain.js";
 import { formatUnits, parseUnits } from "https://esm.sh/ethers@6";
 
 // =====================================================
@@ -16,12 +17,46 @@ import { formatUnits, parseUnits } from "https://esm.sh/ethers@6";
 
 const CANDIDATE_SYMBOLS = ["EVOZ", "LFT", "USDT", "USDC", "BNB", "ETH", "DAI"];
 
+// Minimal read-only ERC-20 ABI, just enough to fetch decimals dynamically
+// so we never have to hardcode/guess a token's decimal precision.
+const ERC20_DECIMALS_ABI = ["function decimals() view returns (uint8)"];
+
 // =====================================================
 // State
 // =====================================================
 
-let loadedMethods   = [];   // [{symbol, isNative, fee, feeFormatted, token, exchange, enabled}]
+let loadedMethods   = [];   // [{symbol, isNative, fee, feeFormatted, burnAmount, treasuryAmount, token, exchange, enabled}]
 let selectedSymbol  = null;
+const decimalsCache = new Map(); // tokenAddress(lowercase) -> decimals, avoids refetching per render
+
+// =====================================================
+// Decimals
+// =====================================================
+
+async function resolveDecimals(pm) {
+    const network = getCurrentNetwork();
+
+    // Native coin (e.g. EVOZ): decimals come from the network's own
+    // currency definition, not a hardcoded constant.
+    if (pm.isNative) {
+        return network.currency?.decimals ?? network.decimals ?? 18;
+    }
+
+    const key = pm.token?.toLowerCase();
+    if (key && decimalsCache.has(key)) {
+        return decimalsCache.get(key);
+    }
+
+    try {
+        const tokenContract = await getContract(pm.token, ERC20_DECIMALS_ABI, true);
+        const decimals = Number(await tokenContract.decimals());
+        if (key) decimalsCache.set(key, decimals);
+        return decimals;
+    } catch (err) {
+        console.warn(`Could not read decimals() for ${pm.token}, falling back to 18.`, err);
+        return 18;
+    }
+}
 
 // =====================================================
 // Load
@@ -36,23 +71,69 @@ export async function loadPaymentMethods() {
         try {
             const pm = await getPaymentMethod(sym);
             if (!pm.enabled) continue;
-            const [, , feeWei] = await getDeployFee(sym);
-            const decimals = pm.isNative ? 18 : 18; // adjust if ERC-20 has different decimals
+
+            // getDeployFee returns (deployFee, burnAmount, treasuryAmount).
+            // `deployFee` (index 0) is the FULL amount the wallet must pay —
+            // burn/treasury are just how the contract internally splits it.
+            // Using anything other than index 0 undercharges the user and
+            // causes the on-chain deploy call to revert.
+            const [deployFee, burnAmount, treasuryAmount] = await getDeployFee(sym);
+
+            const decimals = await resolveDecimals(pm);
+
             loadedMethods.push({
-                symbol:       sym,
-                isNative:     pm.isNative,
-                burnEnabled:  pm.burnEnabled,
-                token:        pm.token,
-                exchange:     pm.exchange,
-                fee:          feeWei,
-                feeFormatted: formatUnits(feeWei, decimals)
+                symbol:               sym,
+                isNative:             pm.isNative,
+                burnEnabled:          pm.burnEnabled,
+                token:                pm.token,
+                exchange:             pm.exchange,
+                decimals,
+                fee:                  deployFee,
+                feeFormatted:         formatUnits(deployFee, decimals),
+                burnAmount,
+                treasuryAmount,
+                burnAmountFormatted:      formatUnits(burnAmount, decimals),
+                treasuryAmountFormatted:  formatUnits(treasuryAmount, decimals)
             });
-        } catch {
-            // symbol not registered, skip
+        } catch (err) {
+            // symbol not registered on this network, skip — but don't fail silently
+            // in a way that's impossible to debug in production.
+            console.warn(`Skipping payment method "${sym}":`, err?.shortMessage || err?.message || err);
         }
     }
 
     return loadedMethods;
+}
+
+// =====================================================
+// Refresh a single fee (call right before charging the
+// user, since an admin may change fees between page load
+// and the moment the deploy transaction is sent).
+// =====================================================
+
+export async function refreshDeployFee(symbol) {
+    const existing = loadedMethods.find(m => m.symbol === symbol);
+    const pm = existing ?? await getPaymentMethod(symbol);
+
+    const [deployFee, burnAmount, treasuryAmount] = await getDeployFee(symbol);
+    const decimals = existing?.decimals ?? await resolveDecimals(pm);
+
+    const updated = {
+        ...(existing ?? { symbol, isNative: pm.isNative, token: pm.token, exchange: pm.exchange, burnEnabled: pm.burnEnabled }),
+        decimals,
+        fee: deployFee,
+        feeFormatted: formatUnits(deployFee, decimals),
+        burnAmount,
+        treasuryAmount,
+        burnAmountFormatted: formatUnits(burnAmount, decimals),
+        treasuryAmountFormatted: formatUnits(treasuryAmount, decimals)
+    };
+
+    const idx = loadedMethods.findIndex(m => m.symbol === symbol);
+    if (idx >= 0) loadedMethods[idx] = updated;
+    else loadedMethods.push(updated);
+
+    return updated;
 }
 
 // =====================================================
@@ -174,6 +255,7 @@ export async function signPermit(signer, tokenContract, spender, value, deadline
 
 export default {
     loadPaymentMethods,
+    refreshDeployFee,
     renderPaymentCards,
     selectPayment,
     getSelectedPayment,

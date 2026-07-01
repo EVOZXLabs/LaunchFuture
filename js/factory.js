@@ -249,6 +249,7 @@ export async function predictTokenAddress(
 // =====================================================
 
 async function executeTransaction(
+    contract,
     tx
 ) {
 
@@ -256,11 +257,40 @@ async function executeTransaction(
 
         await tx.wait();
 
+    // The factory's deploy functions return the new token's address as
+    // their function return value, but since these are state-changing
+    // transactions sent through a signer, that return value is never
+    // surfaced to us directly — it has to be decoded from the
+    // TokenDeployed event in the receipt's logs instead.
+    let tokenAddress = null;
+
+    for (const log of receipt.logs ?? []) {
+
+        try {
+
+            const parsed = contract.interface.parseLog(log);
+
+            if (parsed?.name === "TokenDeployed") {
+
+                tokenAddress = parsed.args.token;
+
+                break;
+
+            }
+
+        } catch {
+            // log belongs to another contract (e.g. the token itself), ignore
+        }
+
+    }
+
     return {
 
         tx,
 
         receipt,
+
+        tokenAddress,
 
         txHash:
 
@@ -304,6 +334,8 @@ export async function deployWithNative(
 
     return await executeTransaction(
 
+    contract,
+
     tx
 
 );
@@ -344,6 +376,8 @@ export async function deployWithPermit(
 
     return await executeTransaction(
 
+    contract,
+
     tx
 
 );
@@ -374,6 +408,8 @@ export async function deployCreate2(
         );
 
     return await executeTransaction(
+
+    contract,
 
     tx
 

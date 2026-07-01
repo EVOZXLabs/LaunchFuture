@@ -1153,3 +1153,192 @@ export function appendConsole(
         ui.deployConsoleOutput.scrollHeight;
 
 }
+
+// =====================================================
+// Modal
+// =====================================================
+
+export function openModal({
+
+    title = "LaunchFuture",
+
+    bodyHTML = "",
+
+    showFooter = false,
+
+    confirmText = "Confirm",
+
+    onConfirm = null
+
+} = {}) {
+
+    if (ui.modalTitle) {
+        ui.modalTitle.textContent = title;
+    }
+
+    if (ui.modalBody) {
+        ui.modalBody.innerHTML = bodyHTML;
+    }
+
+    if (ui.modalFooter === undefined) {
+        ui.modalFooter = $("modalFooter");
+    }
+
+    if (ui.modalFooter) {
+        ui.modalFooter.hidden = !showFooter;
+    }
+
+    if (ui.modalConfirm) {
+        ui.modalConfirm.textContent = confirmText;
+        ui.modalConfirm.onclick = () => {
+            if (typeof onConfirm === "function") onConfirm();
+            closeModal();
+        };
+    }
+
+    if (ui.modal) {
+        ui.modal.hidden = false;
+        document.body.classList.add("modalOpen");
+    }
+
+    state.modalOpen = true;
+
+    if (window.lucide) {
+        lucide.createIcons();
+    }
+}
+
+export function closeModal() {
+
+    if (ui.modal) {
+        ui.modal.hidden = true;
+        document.body.classList.remove("modalOpen");
+    }
+
+    state.modalOpen = false;
+}
+
+export function bindModal() {
+
+    ui.modalClose?.addEventListener("click", closeModal);
+    ui.modalCancel?.addEventListener("click", closeModal);
+
+    const backdrop = $("modalBackdrop");
+    backdrop?.addEventListener("click", closeModal);
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && state.modalOpen) closeModal();
+    });
+}
+
+// =====================================================
+// Toast
+// =====================================================
+
+export function showToast({
+
+    title = "",
+
+    message = "",
+
+    variant = "info"
+
+} = {}) {
+
+    if (!ui.toastContainer || !ui.toastTemplate) {
+
+        console.warn(message || title);
+        return;
+    }
+
+    const node = ui.toastTemplate.content.cloneNode(true);
+    const toast = node.querySelector(".toast");
+
+    if (toast) {
+        toast.classList.add(`toast--${variant}`);
+    }
+
+    const titleEl = node.querySelector(".toastContent h4");
+    const msgEl = node.querySelector(".toastContent p");
+
+    if (titleEl) titleEl.textContent = title;
+    if (msgEl) msgEl.textContent = message;
+
+    const closeBtn = node.querySelector("[data-toast-close]");
+    const el = ui.toastContainer.appendChild(node);
+    const inserted = ui.toastContainer.lastElementChild;
+
+    const remove = () => inserted?.remove();
+
+    closeBtn?.addEventListener("click", remove);
+
+    setTimeout(remove, 5000);
+}
+
+// =====================================================
+// Theme (Dark / Light)
+// =====================================================
+
+const THEME_KEY = "launchfuture.theme";
+
+export function getTheme() {
+
+    return document.documentElement.getAttribute("data-theme") === "light"
+        ? "light"
+        : "dark";
+}
+
+function applyThemeIcon(theme) {
+
+    const btn = $("themeButton");
+
+    if (!btn) return;
+
+    // Rebuild the icon element each time — lucide replaces <i data-lucide>
+    // with an inline <svg>, so on repeat toggles there's no <i> left to
+    // just update the attribute on.
+    btn.innerHTML = `<i data-lucide="${theme === "light" ? "sun" : "moon"}"></i>`;
+
+    if (window.lucide) {
+        lucide.createIcons();
+    }
+}
+
+export function setTheme(theme) {
+
+    const resolved = theme === "light" ? "light" : "dark";
+
+    document.documentElement.setAttribute("data-theme", resolved);
+    localStorage.setItem(THEME_KEY, resolved);
+
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+        meta.setAttribute(
+            "content",
+            resolved === "light" ? "#f3f4f7" : "#050505"
+        );
+    }
+
+    applyThemeIcon(resolved);
+}
+
+export function toggleTheme() {
+
+    setTheme(getTheme() === "light" ? "dark" : "light");
+}
+
+export function initTheme() {
+
+    const saved = localStorage.getItem(THEME_KEY);
+
+    if (saved === "light" || saved === "dark") {
+        setTheme(saved);
+        return;
+    }
+
+    const prefersLight =
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: light)").matches;
+
+    setTheme(prefersLight ? "light" : "dark");
+}

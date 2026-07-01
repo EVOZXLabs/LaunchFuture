@@ -99,7 +99,6 @@ import {
 
 import FEATURES from "./features.js";
 import { loadPaymentMethods, renderPaymentCards, getSelectedPayment, getLoadedMethods } from "./payment.js";
-import { formatUnits } from "https://esm.sh/ethers@6";
 
 
 // =====================================================
@@ -698,7 +697,7 @@ async function initPaymentMethods() {
             const hint = document.getElementById("paymentHint");
             if (hint) {
                 if (pm.isNative) {
-                    hint.textContent = `Pay ${formatUnits(pm.fee, 18)} ${pm.symbol} native coin directly from your wallet.`;
+                    hint.textContent = `Pay ${pm.feeFormatted} ${pm.symbol} native coin directly from your wallet.`;
                 } else {
                     hint.textContent = `Pay with ${pm.symbol} ERC-20 token. A gasless EIP-712 permit signature will be requested.`;
                 }
@@ -706,7 +705,7 @@ async function initPaymentMethods() {
             // Update preview fee
             const feeEl = document.getElementById("previewFee");
             if (feeEl) {
-                const feeNum = parseFloat(formatUnits(pm.fee, 18));
+                const feeNum = parseFloat(pm.feeFormatted);
                 feeEl.textContent = feeNum === 0 ? "Free" : `${feeNum % 1 === 0 ? feeNum.toFixed(0) : feeNum.toPrecision(6)} ${pm.symbol}`;
             }
         });

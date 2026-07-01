@@ -393,6 +393,55 @@ export async function switchNetwork(
 }
 
 // =====================================================
+// Ensure Network (switch, or add-then-switch as a fallback)
+// =====================================================
+// Wallets throw error code 4902 from wallet_switchEthereumChain when the
+// chain has never been added before. In that case we fall back to
+// wallet_addEthereumChain using the network's own config, then the
+// wallet switches to it automatically once added.
+
+export async function ensureNetwork(network) {
+
+    if (!window.ethereum) {
+        throw new Error("Wallet provider not found.");
+    }
+
+    const hexChainId = `0x${Number(network.chainId).toString(16)}`;
+
+    try {
+
+        await switchNetwork(network.chainId);
+
+    } catch (err) {
+
+        const notAdded = err?.code === 4902 ||
+            /unrecognized chain|4902/i.test(err?.message || "");
+
+        if (!notAdded) {
+            throw err;
+        }
+
+        await window.ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+                chainId: hexChainId,
+                chainName: network.name,
+                nativeCurrency: {
+                    name: network.currency?.name ?? network.symbol,
+                    symbol: network.currency?.symbol ?? network.symbol,
+                    decimals: network.currency?.decimals ?? 18
+                },
+                rpcUrls: network.rpc ?? [],
+                blockExplorerUrls: network.explorer?.url ? [network.explorer.url] : []
+            }]
+        });
+    }
+
+    await refreshWalletState();
+    saveWalletState();
+}
+
+// =====================================================
 // Wallet Events
 // =====================================================
 
@@ -610,6 +659,8 @@ export default {
     restoreConnection,
 
     switchNetwork,
+
+    ensureNetwork,
 
     registerWalletEvents,
 

@@ -57,15 +57,31 @@ import {
 
     getAccount,
 
+    getChainId,
+
     getWalletName,
 
-    getNetwork
+    getNetwork,
+
+    switchNetwork,
+
+    ensureNetwork
 
 } from "./wallet.js";
 
 import {
 
+    getCurrentNetwork
+
+} from "./networks/index.js";
+
+import {
+
     getFormattedBalance,
+
+    getNativeBalance,
+
+    getERC20Balance,
 
     isAddress
 
@@ -121,12 +137,14 @@ import {
 
 import {
 
-    isSymbolAvailable
+    isSymbolAvailable,
+
+    getFactory
 
 } from "./factory.js";
 
 import FEATURES from "./features.js";
-import { loadPaymentMethods, renderPaymentCards, getSelectedPayment, getLoadedMethods } from "./payment.js";
+import { loadPaymentMethods, renderPaymentCards, getSelectedPayment, refreshDeployFee } from "./payment.js";
 import { formatUnits } from "https://esm.sh/ethers@6";
 
 
@@ -683,6 +701,7 @@ function onStepChange(step) {
 
     if (step === 5) {
         collectWizardData();
+        refreshGasEstimate();
     }
 
     refreshPreviewAndReview();
@@ -775,9 +794,22 @@ async function validateStep2() {
     return true;
 }
 
+function formatFeeForDisplay(pm) {
+    if (!pm) return "Select a payment method";
+    const feeNum = parseFloat(pm.feeFormatted);
+    if (feeNum === 0) return "Free";
+    return `${feeNum % 1 === 0 ? feeNum.toFixed(0) : feeNum.toPrecision(6)} ${pm.symbol}`;
+}
+
 function refreshPreviewAndReview() {
     const data = getWizardData();
     const enabledCount = Object.values(data.features || {}).filter(Boolean).length;
+
+    // Reuse whatever payment method is already selected instead of
+    // wiping the preview back to "Loading..." every time the user
+    // navigates between steps — that's what made the Live Preview
+    // panel look out of sync with what was actually chosen.
+    const selectedPayment = getSelectedPayment();
 
     updatePreview({
         name:     data.token.name || "Token Name",
@@ -785,7 +817,9 @@ function refreshPreviewAndReview() {
         owner:    data.token.owner || "-",
         supply:   data.token.supply || "-",
         decimals: data.token.decimals || 18,
-        features: enabledCount
+        features: enabledCount,
+        fee:      formatFeeForDisplay(selectedPayment),
+        gas:      lastGasEstimate ?? "Calculated at deploy"
     });
 
     updateReview({
@@ -797,6 +831,101 @@ function refreshPreviewAndReview() {
     });
 }
 
+// =====================================================
+// GAS ESTIMATE
+// =====================================================
+// Best-effort estimate shown in the Live Preview panel. Deliberately
+// non-fatal: if estimation fails (e.g. RPC doesn't support eth_estimateGas
+// simulation for a pending config, or wallet not connected yet) we just
+// fall back to an honest label instead of a fake number.
+
+let lastGasEstimate = null;
+
+async function refreshGasEstimate() {
+    const feEl = document.getElementById("previewGas");
+    if (!feEl) return;
+
+    if (!isConnected()) {
+        lastGasEstimate = "Connect wallet to estimate";
+        feEl.textContent = lastGasEstimate;
+        return;
+    }
+
+    const payment = getSelectedPayment();
+    if (!payment) {
+        lastGasEstimate = "Select a payment method";
+        feEl.textContent = lastGasEstimate;
+        return;
+    }
+
+    try {
+        feEl.textContent = "Estimating...";
+
+        const data = getWizardData();
+        const flat = buildValidationConfig({ ...data.token, features: data.features });
+        const validation = await validateTokenConfig(flat);
+        if (!validation.valid) {
+            lastGasEstimate = "Complete configuration to estimate";
+            feEl.textContent = lastGasEstimate;
+            return;
+        }
+
+        const config = buildTokenConfig({
+            ...data.token,
+            features: data.features,
+            owner: data.token.owner || state.wallet.address
+        });
+        const metadata = buildMetadata(data.metadata || {});
+
+        const factory = await getFactory();
+
+        let gas;
+        if (payment.isNative) {
+            gas = await factory.deployWithNative.estimateGas(config, metadata, { value: payment.fee });
+        } else {
+            // Permit-based payment requires a live signature to simulate
+            // accurately, so we don't attempt a synthetic estimate here —
+            // showing an honest label beats a misleading fabricated number.
+            lastGasEstimate = "Estimated at signature step";
+            feEl.textContent = lastGasEstimate;
+            return;
+        }
+
+        const withBuffer = (gas * 120n) / 100n; // +20% safety margin, matches GAS.multiplier
+        lastGasEstimate = `~${withBuffer.toString()} gas`;
+        feEl.textContent = lastGasEstimate;
+
+    } catch (err) {
+        console.warn("Gas estimate failed:", err?.shortMessage || err?.message || err);
+        lastGasEstimate = "Unavailable — check configuration";
+        feEl.textContent = lastGasEstimate;
+    }
+}
+
+
+// Asks the wallet to switch (or add-then-switch) to the app's target
+// network. Returns true on success, false if the user rejected it or it
+// otherwise failed — callers decide how to react to a "no".
+async function promptNetworkSwitch(target) {
+    try {
+        await ensureNetwork(target);
+
+        showToast({
+            title: "Network switched",
+            message: `Connected to ${target.name}.`,
+            variant: "success"
+        });
+
+        if (getCurrentStep() === 2) {
+            initPaymentMethods();
+        }
+
+        return true;
+    } catch (err) {
+        console.warn("Network switch failed:", err?.message || err);
+        return false;
+    }
+}
 
 // =====================================================
 // WALLET CONNECT (button click handler)
@@ -810,6 +939,18 @@ async function handleConnectWallet() {
 
         state.wallet.connected = true;
         state.wallet.address = result.account;
+
+        const target = getCurrentNetwork();
+        if (Number(result.chainId) !== Number(target.chainId)) {
+            const switched = await promptNetworkSwitch(target);
+            if (!switched) {
+                showToast({
+                    title: "Wrong network",
+                    message: `Your wallet is not on ${target.name}. Switch networks to see live fees and deploy.`,
+                    variant: "error"
+                });
+            }
+        }
 
         let balance = "0";
         try {
@@ -883,10 +1024,16 @@ async function initPaymentMethods() {
             // Update preview fee
             const feeEl = document.getElementById("previewFee");
             if (feeEl) {
-                const feeNum = parseFloat(pm.feeFormatted);
-                feeEl.textContent = feeNum === 0 ? "Free" : `${feeNum % 1 === 0 ? feeNum.toFixed(0) : feeNum.toPrecision(6)} ${pm.symbol}`;
+                feeEl.textContent = formatFeeForDisplay(pm);
             }
+            refreshGasEstimate();
         });
+
+        // Auto-select fires synchronously inside renderPaymentCards, so by
+        // the time we get here a payment method is already selected —
+        // kick off the first gas estimate right away instead of waiting
+        // for the user to click a card.
+        refreshGasEstimate();
     } catch (err) {
         if (cards) {
             cards.innerHTML = '<div class="paymentEmpty"><p>Could not load payment methods.<br>Make sure your wallet is connected and you are on the right network.</p></div>';
@@ -947,13 +1094,87 @@ async function handleDeploy() {
         return;
     }
 
+    // A wallet sitting on the wrong chain is the #1 cause of confusing
+    // "missing revert data" / CALL_EXCEPTION errors from estimateGas —
+    // the factory address on that chain either doesn't exist or is a
+    // different contract entirely. Catch it here with a clear message
+    // instead of letting the raw RPC error reach the user.
+    const target = getCurrentNetwork();
+    if (isConnected() && Number(getChainId()) !== Number(target.chainId)) {
+        const switched = await promptNetworkSwitch(target);
+        if (!switched) {
+            showToast({
+                title: "Wrong network",
+                message: `Switch your wallet to ${target.name} before deploying.`,
+                variant: "error"
+            });
+            return;
+        }
+    }
+
+    if (dom.deployButton) dom.deployButton.disabled = true;
+    setLoading(true, "Running pre-deploy checks...");
+    if (dom.deployConsole) dom.deployConsole.textContent = "";
+
+    // The step-2 "Next" click already checks symbol availability once,
+    // but that check can silently pass on RPC hiccups, and the wizard
+    // can be reached directly from a saved draft or the timeline without
+    // re-running it. This is also the #1 real-world cause of the vague
+    // "missing revert data" estimateGas failure, so re-check it here,
+    // right before paying, with a specific and certain message.
+    appendConsole(`> Checking symbol availability...`);
+    try {
+        const available = await isSymbolAvailable(flat.symbol);
+        if (!available) {
+            setLoading(false);
+            if (dom.deployButton) dom.deployButton.disabled = false;
+            appendConsole(`> Error: "${flat.symbol}" is already registered on this network.`);
+            showToast({
+                title: "Symbol already taken",
+                message: `"${flat.symbol}" is already deployed on this network. Choose a different symbol and try again.`,
+                variant: "error"
+            });
+            handleGoToStep(2);
+            return;
+        }
+    } catch (err) {
+        // If the check itself can't run (RPC down), don't block — the
+        // contract still enforces uniqueness at deploy time either way.
+        console.warn("Pre-deploy symbol check failed:", err);
+    }
+
+    // Balance check — the other very common silent-revert cause. Compare
+    // what the wallet actually holds against the fee the contract expects.
+    appendConsole(`> Checking wallet balance...`);
+    try {
+        const fresh = await refreshDeployFee(payment.symbol);
+        let available;
+        if (fresh.isNative) {
+            available = await getNativeBalance(state.wallet.address);
+        } else {
+            available = await getERC20Balance(fresh.token, state.wallet.address);
+        }
+        if (available < fresh.fee) {
+            setLoading(false);
+            if (dom.deployButton) dom.deployButton.disabled = false;
+            const needed = fresh.feeFormatted;
+            const have = formatUnits(available, fresh.decimals);
+            appendConsole(`> Error: Insufficient ${fresh.symbol} balance (have ${have}, need ${needed}).`);
+            showToast({
+                title: "Insufficient balance",
+                message: `You need ${needed} ${fresh.symbol} to deploy, but your wallet only has ${have}.`,
+                variant: "error"
+            });
+            return;
+        }
+    } catch (err) {
+        console.warn("Pre-deploy balance check failed:", err);
+    }
+
     const config   = buildTokenConfig({ ...data.token, features: data.features });
     const metadata = buildMetadata(data.metadata);
 
-    if (dom.deployButton) dom.deployButton.disabled = true;
     setLoading(true, "Preparing deployment...");
-
-    if (dom.deployConsole) dom.deployConsole.textContent = "";
     appendConsole(`> Deploying ${flat.symbol} (${flat.name})...`);
     appendConsole(`> Paying with ${payment.symbol}`);
     updateDeployTimeline(0);
@@ -1048,11 +1269,11 @@ async function openFeeCalculator() {
 
     try {
 
-        let methods = getLoadedMethods();
-
-        if (!methods.length) {
-            methods = await loadPaymentMethods();
-        }
+        // Always re-read straight from the contract on every open, never
+        // reuse whatever was cached from a previous step. An admin can
+        // change fees at any time, and this is the one place users go
+        // specifically to check the *current* on-chain rate.
+        const methods = await loadPaymentMethods();
 
         const body = document.getElementById("modalBody");
         if (!body) return;

@@ -3,7 +3,7 @@
 // Deploy Manager (updated with full payment support)
 // =====================================================
 
-import { connectWallet, isConnected, getSigner } from "./wallet.js";
+import { connectWallet, isConnected, getSigner, getChainId } from "./wallet.js";
 import { deployWithNative, deployWithPermit, getFactory } from "./factory.js";
 import { validateTokenConfig } from "./validation.js";
 import { getSelectedPayment, signPermit, refreshDeployFee } from "./payment.js";
@@ -133,6 +133,11 @@ export async function deployToken(config, metadata) {
         setStatus(DEPLOY_STATUS.CONNECTING);
         if (!isConnected()) await connectWallet();
 
+        const network = getCurrentNetwork();
+        if (Number(getChainId()) !== Number(network.chainId)) {
+            throw new Error(`Your wallet is on the wrong network. Switch to ${network.name} and try again.`);
+        }
+
         setStatus(DEPLOY_STATUS.VALIDATING);
         const validation = await validateTokenConfig(buildValidationConfig({
             name:   config.name,
@@ -218,6 +223,20 @@ function normalizeError(error) {
         return new Error("Insufficient balance to cover the deploy fee and gas.");
     if (/SymbolTaken|symbol.*exists/i.test(raw))
         return new Error("This token symbol is already taken. Please choose another.");
+
+    // ethers surfaces "missing revert data" / CALL_EXCEPTION when
+    // estimateGas fails but the RPC node doesn't return a decoded revert
+    // reason (common on non-standard/lesser-known RPC endpoints). The
+    // transaction would revert, but we can't say exactly why — so give
+    // the user concrete things to check instead of the raw ethers object.
+    if (error?.code === "CALL_EXCEPTION" || /missing revert data/i.test(raw)) {
+        return new Error(
+            "The network rejected this deployment before it could run (no reason was returned). " +
+            "This usually means: the symbol is already taken, the deploy fee changed, your wallet " +
+            "doesn't have enough balance/allowance, or your wallet is on the wrong network. " +
+            "Double-check these and try again."
+        );
+    }
 
     return error;
 }

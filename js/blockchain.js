@@ -7,6 +7,8 @@ import {
     
     BrowserProvider,
 
+    JsonRpcProvider,
+
     Contract,
 
     parseUnits,
@@ -28,6 +30,10 @@ import {
     SECURITY
 } from "./config.js";
 
+import {
+    getCurrentNetwork
+} from "./networks/index.js";
+
 // =====================================================
 // State
 // =====================================================
@@ -35,6 +41,9 @@ import {
 let provider = null;
 
 let signer = null;
+
+let readProvider = null;
+let readProviderNetworkKey = null;
 
 // =====================================================
 // Validation
@@ -158,6 +167,59 @@ export async function getSigner() {
 }
 
 // =====================================================
+// Read-only Provider
+// =====================================================
+// Used for ALL view/read calls (fees, payment methods, stats,
+// symbol availability, etc). Deliberately independent from the
+// injected wallet provider so:
+//   1. Read data (Fee Calculator, Live Preview) works even before
+//      a wallet is connected, or when no wallet extension exists.
+//   2. Reads always target the currently selected network's RPC,
+//      regardless of what chain the connected wallet happens to
+//      be on, so numbers never mix data from two chains.
+// Falls back to the injected wallet provider only if the network's
+// public RPC endpoints all fail (e.g. temporarily down).
+
+export async function getReadProvider() {
+
+    const network = getCurrentNetwork();
+
+    if (readProvider && readProviderNetworkKey === network.key) {
+        return readProvider;
+    }
+
+    const endpoints = Array.isArray(network.rpc) && network.rpc.length
+        ? network.rpc
+        : [];
+
+    for (const url of endpoints) {
+        try {
+            const candidate = new JsonRpcProvider(url, {
+                chainId: network.chainId,
+                name: network.key
+            });
+            // Verify the endpoint is actually reachable before committing to it.
+            await withTimeout(candidate.getBlockNumber(), 8000);
+            readProvider = candidate;
+            readProviderNetworkKey = network.key;
+            return readProvider;
+        } catch (err) {
+            console.warn(`RPC endpoint unreachable, trying next: ${url}`, err?.message || err);
+        }
+    }
+
+    // All public RPCs failed — fall back to the wallet's provider if one
+    // is connected, so reads can still succeed rather than hard-failing.
+    if (window.ethereum) {
+        readProvider = new BrowserProvider(window.ethereum);
+        readProviderNetworkKey = network.key;
+        return readProvider;
+    }
+
+    throw new Error("Could not reach the network. Please check your connection and try again.");
+}
+
+// =====================================================
 // Refresh Signer
 // =====================================================
 
@@ -166,6 +228,10 @@ export function clearSession() {
     provider = null;
 
     signer = null;
+
+    readProvider = null;
+
+    readProviderNetworkKey = null;
 
 }
 
@@ -241,7 +307,7 @@ export async function getContract(
     if (readOnly) {
 
         const currentProvider =
-            await getProvider();
+            await getReadProvider();
 
         return new Contract(
 
@@ -404,6 +470,8 @@ export {
 export default {
 
     getProvider,
+
+    getReadProvider,
 
     getSigner,
 

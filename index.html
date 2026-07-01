@@ -38,6 +38,7 @@
 <link href="./css/app.css" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.min.js"></script>
 <link href="./css/payment.css" rel="stylesheet"/>
+<link href="./css/mobile.css" rel="stylesheet"/>
 </head>
 <body>
 <div id="app">
@@ -1326,19 +1327,30 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!canvas || !window.THREE) return;
 
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-
-    const setSize = () => {
-      const w = window.innerWidth, h = window.innerHeight;
-      renderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    };
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
     const scene  = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-    camera.position.z = 2.8;
-    setSize();
+
+    // Group everything so we can reposition as one unit per breakpoint
+    const group = new THREE.Group();
+    scene.add(group);
+
+    const setSize = () => {
+      const w = window.innerWidth, h = window.innerHeight;
+      const mobile = w < 768;
+
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+
+      // Zoom out a touch on narrow screens so the globe isn't cropped,
+      // and shift it toward the top so it sits behind the hero, not the form.
+      camera.position.z = mobile ? 3.6 : 2.8;
+      group.position.set(mobile ? 0 : 0.62, mobile ? 0.55 : 0.18, 0);
+      group.scale.setScalar(mobile ? 0.85 : 1);
+
+      camera.updateProjectionMatrix();
+    };
 
     // Globe sphere
     const geo = new THREE.SphereGeometry(1, 40, 40);
@@ -1346,40 +1358,46 @@ window.addEventListener("DOMContentLoaded", () => {
       color: 0xffd86a,
       wireframe: true,
       transparent: true,
-      opacity: 0.07
+      opacity: 0.16
     });
     const globe = new THREE.Mesh(geo, mat);
-    scene.add(globe);
+    group.add(globe);
 
     // Glow ring (torus)
     const ringGeo = new THREE.TorusGeometry(1.08, 0.003, 8, 120);
-    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd86a, transparent: true, opacity: 0.35 });
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd86a, transparent: true, opacity: 0.45 });
     const ring    = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = Math.PI / 2;
-    scene.add(ring);
+    group.add(ring);
 
     // Orbit ring
     const orbitGeo = new THREE.TorusGeometry(1.32, 0.002, 8, 160);
-    const orbitMat = new THREE.MeshBasicMaterial({ color: 0xffd86a, transparent: true, opacity: 0.2 });
+    const orbitMat = new THREE.MeshBasicMaterial({ color: 0xffd86a, transparent: true, opacity: 0.28 });
     const orbit    = new THREE.Mesh(orbitGeo, orbitMat);
     orbit.rotation.x = Math.PI / 6;
-    scene.add(orbit);
+    group.add(orbit);
 
     // Dot particle on orbit
-    const dotGeo = new THREE.SphereGeometry(0.012, 8, 8);
+    const dotGeo = new THREE.SphereGeometry(0.016, 8, 8);
     const dotMat = new THREE.MeshBasicMaterial({ color: 0xffd86a });
     const dot    = new THREE.Mesh(dotGeo, dotMat);
-    scene.add(dot);
+    group.add(dot);
     let dotAngle = 0;
 
     // Ambient glow using a large transparent sphere
     const glowGeo = new THREE.SphereGeometry(1.4, 20, 20);
     const glowMat = new THREE.MeshBasicMaterial({
-      color: 0xffd86a, transparent: true, opacity: 0.02, side: THREE.BackSide
+      color: 0xffd86a, transparent: true, opacity: 0.035, side: THREE.BackSide
     });
-    scene.add(new THREE.Mesh(glowGeo, glowMat));
+    group.add(new THREE.Mesh(glowGeo, glowMat));
 
-    window.addEventListener("resize", setSize);
+    setSize();
+
+    let resizeTimer;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(setSize, 120);
+    });
 
     const clock = new THREE.Clock();
     (function animate() {

@@ -16,7 +16,7 @@ let timer = null;
 const clockElement =
 
     document.getElementById(
-        "clock"
+        "clockTime"
     );
 
 // =====================================================
@@ -42,9 +42,6 @@ const TIME_OPTIONS = Object.freeze({
         "2-digit",
 
     minute:
-        "2-digit",
-
-    second:
         "2-digit",
 
     hour12:
@@ -180,21 +177,7 @@ export function updateClock() {
 
     const now = getNow();
 
-    clockElement.innerHTML = `
-
-        <div class="clockTime">
-
-            ${formatTime(now)}
-
-        </div>
-
-        <div class="clockDate">
-
-            ${formatDate(now)}
-
-        </div>
-
-    `;
+    clockElement.textContent = formatTime(now);
 
 }
 

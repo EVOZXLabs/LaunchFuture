@@ -204,7 +204,7 @@ html, body{
         position: sticky;
         bottom: 0;
         z-index: 30;
-        background: rgba(17,18,20,.98);
+        background: rgba(var(--surface-rgb),.98);
         backdrop-filter: blur(20px);
     }
 

@@ -7,8 +7,7 @@
 
 import { getFactory, getDeployFee, getPaymentMethod } from "./factory.js";
 import { getCurrentNetwork } from "./networks/index.js";
-import { getContract } from "./blockchain.js";
-import { formatUnits, parseUnits } from "ethers";
+import { formatUnits, parseUnits } from "https://esm.sh/ethers@6";
 
 // =====================================================
 // Known payment symbols to try loading
@@ -17,44 +16,12 @@ import { formatUnits, parseUnits } from "ethers";
 
 const CANDIDATE_SYMBOLS = ["EVOZ", "LFT", "USDT", "USDC", "BNB", "ETH", "DAI"];
 
-// Minimal read-only ERC-20 ABI, just enough to query decimals dynamically
-const ERC20_DECIMALS_ABI = ["function decimals() view returns (uint8)"];
-
 // =====================================================
 // State
 // =====================================================
 
 let loadedMethods   = [];   // [{symbol, isNative, fee, feeFormatted, token, exchange, enabled}]
 let selectedSymbol  = null;
-let decimalsCache   = {};   // { [tokenAddress]: number } — avoid refetching decimals() every load
-
-// =====================================================
-// Decimals (always resolved on-chain, never hardcoded)
-// =====================================================
-
-async function resolveDecimals(pm) {
-    const network = getCurrentNetwork();
-
-    // Native coin (e.g. EVOZ) uses the chain's native decimals (18 for EVM chains)
-    if (pm.isNative) {
-        return network?.currency?.decimals ?? network?.decimals ?? 18;
-    }
-
-    // ERC-20 (e.g. LFT): query decimals() directly from the token contract
-    if (decimalsCache[pm.token] !== undefined) {
-        return decimalsCache[pm.token];
-    }
-
-    try {
-        const tokenContract = await getContract(pm.token, ERC20_DECIMALS_ABI, true);
-        const dec = await tokenContract.decimals();
-        decimalsCache[pm.token] = Number(dec);
-        return decimalsCache[pm.token];
-    } catch {
-        // Fallback only if the on-chain call itself fails (e.g. RPC hiccup)
-        return 18;
-    }
-}
 
 // =====================================================
 // Load
@@ -69,23 +36,16 @@ export async function loadPaymentMethods() {
         try {
             const pm = await getPaymentMethod(sym);
             if (!pm.enabled) continue;
-
-            // getDeployFee returns (deployFee, burnAmount, treasuryAmount).
-            // The first value is the FULL fee the caller must pay —
-            // burnAmount/treasuryAmount are just how the fee is internally
-            // split, not the amount to charge/display.
-            const [deployFee] = await getDeployFee(sym);
-
-            const decimals = await resolveDecimals(pm);
-
+            const [, , feeWei] = await getDeployFee(sym);
+            const decimals = pm.isNative ? 18 : 18; // adjust if ERC-20 has different decimals
             loadedMethods.push({
                 symbol:       sym,
                 isNative:     pm.isNative,
                 burnEnabled:  pm.burnEnabled,
                 token:        pm.token,
                 exchange:     pm.exchange,
-                fee:          deployFee,
-                feeFormatted: formatUnits(deployFee, decimals)
+                fee:          feeWei,
+                feeFormatted: formatUnits(feeWei, decimals)
             });
         } catch {
             // symbol not registered, skip
